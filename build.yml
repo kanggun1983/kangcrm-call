@@ -1,0 +1,68 @@
+name: 강CRM 전화 앱 만들기
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 받기
+        uses: actions/checkout@v4
+
+      - name: 압축 풀기
+        run: |
+          ZIP=$(ls kangcrm-call-src*.zip 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$ZIP" ]; then echo "::error::kangcrm-call-src_v○.zip 파일을 먼저 올려주세요"; exit 1; fi
+          echo "압축 파일: $ZIP"
+          rm -rf src && mkdir src && unzip -q -o "$ZIP" -d src
+          ls -la src
+
+      - name: 자바 17 준비
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 그래들 준비
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: 서명 키 (처음 한 번 만들어 저장)
+        env:
+          KS_PASS: ${{ secrets.KS_PASS }}
+        run: |
+          if [ -z "$KS_PASS" ]; then echo "::error::Settings → Secrets and variables → Actions 에 KS_PASS(비밀번호)를 먼저 넣어주세요"; exit 1; fi
+          if [ ! -f keystore.p12 ]; then
+            keytool -genkeypair -storetype PKCS12 -keystore keystore.p12 -alias kangcrm -keyalg RSA -keysize 2048 -validity 10000 -storepass "$KS_PASS" -keypass "$KS_PASS" -dname "CN=KangCRM Call, O=KangCRM, C=KR"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add keystore.p12
+            git commit -m "서명 키 만들기 (처음 한 번)"
+            git push
+          fi
+          cp keystore.p12 src/keystore.p12
+
+      - name: 앱 만들기
+        working-directory: src
+        env:
+          KS_PASS: ${{ secrets.KS_PASS }}
+          BUILD_NO: ${{ github.run_number }}
+        run: gradle --no-daemon --stacktrace assembleRelease
+
+      - name: 파일 이름 정리
+        run: cp src/app/build/outputs/apk/release/app-release.apk kangcrm-call.apk
+
+      - name: 받는 곳(Releases)에 올리기
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: 강CRM 전화 v1.0.${{ github.run_number }}
+          files: kangcrm-call.apk
+          make_latest: true
